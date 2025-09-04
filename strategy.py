@@ -34,7 +34,7 @@ class LiveTradingBot:
         
         # Strategy parameters (optimized values)
         self.symbol = self.config.get('symbol', 'BTCUSDT')
-        self.interval = self.config.get('interval', '1h')
+        self.interval = self.config.get('interval', '15m')  # Changed to 15m
         self.envelope_lookback = self.config.get('envelope_lookback', 200)
         self.h = self.config.get('h', 12.0)
         self.mult = self.config.get('mult', 2.0)
@@ -45,7 +45,7 @@ class LiveTradingBot:
         
         # Trading state
         self.position = None
-        self.capital = self.config.get('initial_capital', 1000.0)  # Start with smaller amount
+        self.capital = self.config.get('initial_capital', 1000.0)
         self.is_running = False
         self.price_data = pd.DataFrame()
         
@@ -65,10 +65,10 @@ class LiveTradingBot:
             with open(config_file, 'r') as f:
                 return json.load(f)
         else:
-            # Create default config
+            # Create default config with 15m interval and email alerts
             default_config = {
                 "symbol": "BTCUSDT",
-                "interval": "1h",
+                "interval": "15m",
                 "envelope_lookback": 200,
                 "h": 12.0,
                 "mult": 2.0,
@@ -80,12 +80,12 @@ class LiveTradingBot:
                 "testnet": True,
                 "log_level": "INFO",
                 "max_positions": 1,
-                "enable_email_alerts": False,
+                "enable_email_alerts": True,
                 "email_config": {
-                    "smtp_server": "",
+                    "smtp_server": "smtp.gmail.com",
                     "smtp_port": 587,
-                    "email": "",
-                    "password": ""
+                    "email": "probotroge@gmail.com",
+                    "password": "your_app_password_here"
                 }
             }
             
@@ -93,6 +93,7 @@ class LiveTradingBot:
                 json.dump(default_config, f, indent=4)
             
             print(f"Created default config file: {config_file}")
+            print("⚠️ Please update the email password in config.json for alerts to work")
             return default_config
     
     def setup_logging(self):
@@ -113,7 +114,7 @@ class LiveTradingBot:
         )
         
         self.logger = logging.getLogger('NWTradingBot')
-        self.logger.info("Trading bot initialized")
+        self.logger.info("Trading bot initialized with 15m timeframe")
     
     def validate_api(self):
         """Validate Binance API connection"""
@@ -388,9 +389,21 @@ class LiveTradingBot:
                 self.logger.info(f"   Stop Loss: ${stop_loss:.4f}")
                 self.logger.info(f"   Take Profit: ${take_profit:.4f}")
                 
-                # Send alert if enabled
-                self.send_alert(f"Position Opened", 
-                              f"Opened {signal_type} position on {self.symbol} at ${current_price:.4f}")
+                # Send alert
+                alert_message = f"""
+🚀 NEW POSITION OPENED - {signal_type.upper()}
+
+Symbol: {self.symbol}
+Entry Price: ${current_price:.4f}
+Position Size: ${position_size:.2f}
+Stop Loss: ${stop_loss:.4f}
+Take Profit: ${take_profit:.4f}
+RSI: {signal_data['rsi']:.1f}
+Time: {datetime.now().strftime('%Y-%m-%d %H:%M:%S')}
+
+Nadaraya-Watson Trading Bot - 15m Timeframe
+"""
+                self.send_alert(f"Position Opened - {signal_type.upper()}", alert_message)
         
         except Exception as e:
             self.logger.error(f"Error opening position: {str(e)}")
@@ -411,7 +424,6 @@ class LiveTradingBot:
                 side = 'BUY'
             
             # For simplicity, using market order to close
-            # In production, you might want to use limit orders
             order = self.place_order(side, self.position['quantity'])
             
             if order:
@@ -423,15 +435,31 @@ class LiveTradingBot:
                     pnl_pct = (entry_price - current_price) / entry_price
                 
                 pnl_dollar = self.position['quantity'] * pnl_pct
+                duration = datetime.now() - self.position['entry_time']
                 
                 self.logger.info(f"📈 Closed {self.position['type']} position:")
                 self.logger.info(f"   Exit Price: ${current_price:.4f}")
                 self.logger.info(f"   P&L: {pnl_pct*100:.2f}% (${pnl_dollar:.2f})")
+                self.logger.info(f"   Duration: {duration}")
                 self.logger.info(f"   Reason: {reason}")
                 
                 # Send alert
-                self.send_alert(f"Position Closed - {reason}", 
-                              f"Closed {self.position['type']} position on {self.symbol} at ${current_price:.4f}\nP&L: {pnl_pct*100:.2f}%")
+                alert_message = f"""
+📈 POSITION CLOSED - {self.position['type'].upper()}
+
+Symbol: {self.symbol}
+Entry Price: ${entry_price:.4f}
+Exit Price: ${current_price:.4f}
+P&L: {pnl_pct*100:.2f}% (${pnl_dollar:.2f})
+Duration: {duration}
+Reason: {reason}
+Time: {datetime.now().strftime('%Y-%m-%d %H:%M:%S')}
+
+Updated Capital: ${self.capital + pnl_dollar:.2f}
+
+Nadaraya-Watson Trading Bot - 15m Timeframe
+"""
+                self.send_alert(f"Position Closed - {reason}", alert_message)
                 
                 # Update capital (simplified)
                 self.capital += pnl_dollar
@@ -473,10 +501,15 @@ class LiveTradingBot:
             
             email_config = self.config.get('email_config', {})
             
+            # Skip if no password configured
+            if not email_config.get('password') or email_config.get('password') == 'your_app_password_here':
+                self.logger.warning("Email password not configured, skipping alert")
+                return
+            
             msg = MIMEMultipart()
             msg['From'] = email_config['email']
             msg['To'] = email_config['email']
-            msg['Subject'] = f"Trading Bot Alert: {subject}"
+            msg['Subject'] = f"🤖 Nadaraya-Watson Bot: {subject}"
             
             msg.attach(MIMEText(message, 'plain'))
             
@@ -487,7 +520,7 @@ class LiveTradingBot:
             server.sendmail(email_config['email'], email_config['email'], text)
             server.quit()
             
-            self.logger.info(f"Alert sent: {subject}")
+            self.logger.info(f"📧 Alert sent: {subject}")
             
         except Exception as e:
             self.logger.error(f"Error sending alert: {str(e)}")
@@ -498,7 +531,8 @@ class LiveTradingBot:
             'timestamp': datetime.now().isoformat(),
             'capital': self.capital,
             'position': self.position,
-            'is_running': self.is_running
+            'is_running': self.is_running,
+            'interval': self.interval
         }
         
         with open('bot_state.json', 'w') as f:
@@ -519,6 +553,30 @@ class LiveTradingBot:
         except Exception as e:
             self.logger.error(f"Error loading state: {str(e)}")
     
+    def send_startup_alert(self):
+        """Send startup notification"""
+        startup_message = f"""
+🤖 TRADING BOT STARTED
+
+Symbol: {self.symbol}
+Timeframe: {self.interval}
+Strategy: Nadaraya-Watson
+Parameters:
+- Envelope Lookback: {self.envelope_lookback}
+- Bandwidth (h): {self.h}
+- Multiplier: {self.mult}
+- ATR Multiplier: {self.atr_mult}
+- Take Profit Multiplier: {self.tp_mult}
+- Leverage: {self.leverage}x
+- Risk per Trade: {self.risk_per_trade*100}%
+
+Initial Capital: ${self.capital:.2f}
+Mode: {'TESTNET' if self.config.get('testnet', True) else 'LIVE TRADING'}
+
+Started at: {datetime.now().strftime('%Y-%m-%d %H:%M:%S')}
+"""
+        self.send_alert("Bot Started", startup_message)
+    
     def run(self):
         """Main trading loop"""
         self.logger.info("🚀 Starting live trading bot...")
@@ -527,6 +585,9 @@ class LiveTradingBot:
         
         # Load previous state
         self.load_state()
+        
+        # Send startup alert
+        self.send_startup_alert()
         
         self.is_running = True
         
@@ -554,6 +615,8 @@ class LiveTradingBot:
                     if signal_data:
                         self.logger.info(f"💹 Current Price: ${current_price:.4f} | "
                                        f"RSI: {signal_data['rsi']:.1f} | "
+                                       f"Upper Band: ${signal_data['upper_band']:.4f} | "
+                                       f"Lower Band: ${signal_data['lower_band']:.4f} | "
                                        f"Position: {'None' if self.position is None else self.position['type']}")
                     
                     # Act on signals
@@ -563,12 +626,11 @@ class LiveTradingBot:
                     # Save state
                     self.save_state()
                     
-                    # Wait for next candle
-                    # For 1h interval, wait 3600 seconds
+                    # Wait for next candle - 15 minutes = 900 seconds
                     interval_seconds = {'1m': 60, '5m': 300, '15m': 900, '1h': 3600, '4h': 14400, '1d': 86400}
-                    wait_time = interval_seconds.get(self.interval, 3600)
+                    wait_time = interval_seconds.get(self.interval, 900)
                     
-                    self.logger.info(f"⏰ Waiting {wait_time}s for next candle...")
+                    self.logger.info(f"⏰ Waiting {wait_time}s for next 15m candle...")
                     time.sleep(wait_time)
                     
                 except KeyboardInterrupt:
@@ -576,6 +638,21 @@ class LiveTradingBot:
                 except Exception as e:
                     self.logger.error(f"Error in main loop: {str(e)}")
                     self.logger.error(traceback.format_exc())
+                    
+                    # Send error alert
+                    error_message = f"""
+❌ ERROR IN TRADING BOT
+
+Error: {str(e)}
+Time: {datetime.now().strftime('%Y-%m-%d %H:%M:%S')}
+
+Bot will retry in 60 seconds...
+
+Traceback:
+{traceback.format_exc()}
+"""
+                    self.send_alert("Bot Error", error_message)
+                    
                     time.sleep(60)  # Wait before retrying
                     
         except KeyboardInterrupt:
@@ -587,6 +664,18 @@ class LiveTradingBot:
             if self.position is not None:
                 self.close_position("Bot Shutdown")
             
+            # Send shutdown alert
+            shutdown_message = f"""
+🛑 TRADING BOT SHUTDOWN
+
+Final Capital: ${self.capital:.2f}
+Shutdown Time: {datetime.now().strftime('%Y-%m-%d %H:%M:%S')}
+Position at Shutdown: {'None' if self.position is None else self.position['type']}
+
+Bot has been stopped gracefully.
+"""
+            self.send_alert("Bot Shutdown", shutdown_message)
+            
             # Save final state
             self.save_state()
             
@@ -595,8 +684,8 @@ class LiveTradingBot:
 
 def main():
     """Main function"""
-    print("🤖 Nadaraya-Watson Live Trading Bot")
-    print("=" * 50)
+    print("🤖 Nadaraya-Watson Live Trading Bot - 15m Timeframe")
+    print("=" * 60)
     
     # Load API credentials
     try:
